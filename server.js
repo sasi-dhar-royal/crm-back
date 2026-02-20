@@ -1,0 +1,113 @@
+const express = require('express');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
+const connectDB = require('./config/db');
+const authRoutes = require('./routes/authRoutes');
+
+const initCronJobs = require('./services/cronService');
+const { connectToWhatsApp, setSocketIO, getStatus, requestPairingCode } = require('./services/whatsappService');
+
+dotenv.config();
+
+connectDB();
+initCronJobs();
+
+const app = express();
+const server = http.createServer(app);
+
+// Socket.IO setup with CORS
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }
+});
+
+// Set Socket.IO instance for WhatsApp service
+setSocketIO(io);
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+    console.log('🔌 Client connected to Socket.IO');
+
+    socket.on('disconnect', () => {
+        console.log('🔌 Client disconnected from Socket.IO');
+    });
+
+    socket.on('request-qr', async () => {
+        console.log('📱 Client requested QR code (immediate)');
+        const { status, qr } = getStatus();
+
+        if (status === 'connected') {
+            socket.emit('connection-status', { status: 'connected', message: 'WhatsApp is already connected' });
+        } else if (qr) {
+            console.log('⚡ Sending cached QR code...');
+            try {
+                const QRCode = require('qrcode');
+                const qrDataURL = await QRCode.toDataURL(qr);
+                socket.emit('qr', qrDataURL);
+                socket.emit('connection-status', { status: 'waiting', message: 'Scan QR Code' });
+            } catch (err) {
+                console.error('Error generating cached QR:', err);
+            }
+        } else {
+            socket.emit('connection-status', { status: 'disconnected', message: 'Waiting...' });
+        }
+    });
+
+    socket.on('request-pairing', async (phoneNumber) => {
+        console.log(`📱 Client requested pairing code for ${phoneNumber}`);
+        try {
+            await requestPairingCode(phoneNumber);
+            socket.emit('connection-status', { status: 'pairing', message: 'Pairing Code Requested...' });
+        } catch (error) {
+            console.error('Pairing Error:', error);
+            socket.emit('pairing-error', error.message);
+        }
+    });
+});
+
+// Initialize WhatsApp connection (NON-BLOCKING)
+console.log('Initializing WhatsApp connection...');
+connectToWhatsApp().catch(err => {
+    console.error('WhatsApp connection error (Non-fatal):', err.message);
+    // Do not crash the server here
+});
+
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+}));
+app.use(express.json());
+
+app.use('/api/auth', authRoutes);
+app.use('/api/leads', require('./routes/leadRoutes'));
+app.use('/api/messages', require('./routes/messageRoutes'));
+app.use('/api/analytics', require('./routes/analyticsRoutes'));
+app.use('/api/webhooks', require('./routes/webhookRoutes'));
+app.use('/api/templates', require('./routes/templateRoutes'));
+app.use('/api/social', require('./routes/socialAccountRoutes'));
+
+app.get('/', (req, res) => {
+    res.send('API is running...');
+});
+
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({
+        message: err.message,
+        stack: process.env.NODE_ENV === 'production' ? null : err.stack,
+    });
+});
+
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Socket.IO ready for WhatsApp QR code`);
+});
+
+module.exports = app;
+# Force redeploy
