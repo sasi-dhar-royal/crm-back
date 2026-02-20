@@ -39,8 +39,10 @@ app.use((err, req, res, next) => {
 });
 
 // === LOCAL DEVELOPMENT ONLY ===
-// Socket.IO + WhatsApp + Cron only run locally (not on Vercel)
-if (process.env.NODE_ENV !== 'production') {
+// === WhatsApp + Socket.IO (skip on Vercel serverless only) ===
+const isVercel = process.env.VERCEL === '1';
+
+if (!isVercel) {
     const http = require('http');
     const { Server } = require('socket.io');
     const { connectToWhatsApp, setSocketIO, getStatus, requestPairingCode } = require('./services/whatsappService');
@@ -105,11 +107,13 @@ if (process.env.NODE_ENV !== 'production') {
     });
 
     const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
+    server.listen(PORT, '0.0.0.0', () => {
         console.log(`Server running on port ${PORT}`);
         console.log(`Socket.IO ready for WhatsApp QR code`);
     });
+} else {
+    // Vercel: just export the app, no listen needed
+    console.log('Running on Vercel (serverless mode)');
 }
 
-// Export for Vercel serverless
 module.exports = app;
