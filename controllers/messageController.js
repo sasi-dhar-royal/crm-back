@@ -1,5 +1,14 @@
 const MessageLog = require('../models/MessageLog');
-const { sendMessage, getStatus } = require('../services/whatsappService');
+
+// Lazy-load WhatsApp service (crashes on Vercel if loaded at top level)
+const getWhatsApp = () => {
+    try {
+        return require('../services/whatsappService');
+    } catch (err) {
+        console.error('WhatsApp service not available:', err.message);
+        return null;
+    }
+};
 
 // @desc    Send a single WhatsApp message
 // @route   POST /api/messages/send
@@ -7,7 +16,9 @@ const { sendMessage, getStatus } = require('../services/whatsappService');
 const sendSingleMessage = async (req, res) => {
     const { phone, message } = req.body;
     try {
-        await sendMessage(phone, message);
+        const wa = getWhatsApp();
+        if (!wa) return res.status(503).json({ message: 'WhatsApp not available in this environment' });
+        await wa.sendMessage(phone, message);
 
         // Log single message
         await MessageLog.create({
@@ -57,7 +68,9 @@ const sendBulkMessages = async (req, res) => {
 
     for (const phone of numbers) {
         try {
-            await sendMessage(phone, message);
+            const wa = getWhatsApp();
+            if (!wa) throw new Error('WhatsApp not available');
+            await wa.sendMessage(phone, message);
             results.sent++;
             results.details.push({ phone, status: 'sent' });
             await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit 1 sec
@@ -86,7 +99,9 @@ const sendBulkMessages = async (req, res) => {
 // @route   GET /api/messages/status
 // @access  Private
 const getWhatsAppStatus = (req, res) => {
-    const status = getStatus();
+    const wa = getWhatsApp();
+    if (!wa) return res.json({ status: 'unavailable', message: 'WhatsApp not available in this environment' });
+    const status = wa.getStatus();
     res.json(status);
 };
 
